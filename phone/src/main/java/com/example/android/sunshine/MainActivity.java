@@ -15,10 +15,16 @@
  */
 package com.example.android.sunshine;
 
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
+import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
+import android.support.annotation.StringDef;
 import android.support.v4.app.LoaderManager;
 import android.support.v4.content.CursorLoader;
 import android.support.v4.content.Loader;
@@ -35,13 +41,29 @@ import android.widget.ProgressBar;
 import com.example.android.sunshine.data.SunshinePreferences;
 import com.example.android.sunshine.data.WeatherContract;
 import com.example.android.sunshine.sync.SunshineSyncUtils;
+import com.example.android.sunshine.utilities.SunshineWeatherUtils;
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.wearable.Asset;
+import com.google.android.gms.wearable.DataMap;
+import com.google.android.gms.wearable.PutDataMapRequest;
+import com.google.android.gms.wearable.Wearable;
+import com.google.android.gms.common.api.GoogleApiClient;
+
+import java.io.ByteArrayOutputStream;
+
 
 public class MainActivity extends AppCompatActivity implements
         LoaderManager.LoaderCallbacks<Cursor>,
-        ForecastAdapter.ForecastAdapterOnClickHandler {
+        ForecastAdapter.ForecastAdapterOnClickHandler, GoogleApiClient.ConnectionCallbacks,
+        GoogleApiClient.OnConnectionFailedListener{
 
     private final String TAG = MainActivity.class.getSimpleName();
 
+    private GoogleApiClient mGoogleApiClient;
+
+    public MainActivity(){
+
+    }
     /*
      * The columns of data that we are interested in displaying within our MainActivity's list of
      * weather data.
@@ -85,7 +107,12 @@ public class MainActivity extends AppCompatActivity implements
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_forecast);
         getSupportActionBar().setElevation(0f);
-
+        mGoogleApiClient = new GoogleApiClient.Builder(this)
+                .addApi(Wearable.API)
+                .addConnectionCallbacks(this)
+                .addOnConnectionFailedListener(this)
+                .build();
+        mGoogleApiClient.connect();
         /*
          * Using findViewById, we get a reference to our RecyclerView from xml. This allows us to
          * do things like set the adapter of the RecyclerView and toggle the visibility.
@@ -342,5 +369,46 @@ public class MainActivity extends AppCompatActivity implements
         }
 
         return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    public void onConnected(@Nullable Bundle bundle) {
+        Log.v(TAG, "connected");
+        sendData();
+    }
+
+    @Override
+    public void onConnectionSuspended(int i) {
+
+    }
+
+    @Override
+    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
+
+    }
+    public void sendData(){
+        Log.v(TAG, "sending data");
+        Context mContext = getApplicationContext();
+        Uri uri = WeatherContract.WeatherEntry.buildWeatherUriWithDate(System.currentTimeMillis());
+        Cursor cursor = getApplicationContext().getContentResolver().query(uri,MAIN_FORECAST_PROJECTION, null, null, null);
+        if (cursor == null || !cursor.moveToFirst())
+            return;
+        String t_high =  SunshineWeatherUtils.formatTemperature(mContext, cursor.getDouble(INDEX_WEATHER_MAX_TEMP));
+        String t_low =  SunshineWeatherUtils.formatTemperature(mContext, cursor.getDouble(INDEX_WEATHER_MIN_TEMP));
+
+        PutDataMapRequest mapRequest = PutDataMapRequest.create("/weather");
+        DataMap dataMap = mapRequest.getDataMap();
+        dataMap.putLong("time", System.currentTimeMillis());
+        dataMap.putString("high", t_high);
+        dataMap.putString("low", t_low);
+
+        int iconId = SunshineWeatherUtils.getLargeArtResourceIdForWeatherCondition(cursor.getInt(INDEX_WEATHER_CONDITION_ID));
+        Bitmap bitmap = BitmapFactory.decodeResource(mContext.getResources(), iconId);
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream);
+        Asset iconAsset = Asset.createFromBytes(byteArrayOutputStream.toByteArray());
+        dataMap.putAsset("icon", iconAsset);
+        mapRequest.setUrgent();
+        Wearable.DataApi.putDataItem(mGoogleApiClient, mapRequest.asPutDataRequest());
     }
 }
